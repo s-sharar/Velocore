@@ -13,9 +13,29 @@
 
 using namespace velocore;
 
-// Global order book instance - the heart of the matching engine
+// Global order book instance
 OrderBook orderBook;
 TradeStatistics stats;
+
+// Order validation function
+bool validateOrder(const std::string& symbol, Side side, OrderType type, double price, int quantity, std::string& errorMessage) {
+    if (quantity <= 0) {
+        errorMessage = "Quantity must be greater than 0";
+        return false;
+    }
+    
+    if (type == OrderType::Limit && price <= 0) {
+        errorMessage = "Price must be greater than 0 for limit orders";
+        return false;
+    }
+    
+    if (symbol.empty()) {
+        errorMessage = "Symbol cannot be empty";
+        return false;
+    }
+    
+    return true;
+}
 
 int main() {
     std::cout << "=== Velocore Trading Simulator ===" << std::endl;
@@ -81,7 +101,20 @@ int main() {
                 return crow::response(400, "Invalid JSON");
             }
             
-            // Create order from JSON
+            // Extract order data for validation
+            std::string symbol = json_data["symbol"].s();
+            Side side = side_from_string(json_data["side"].s());
+            OrderType type = order_type_from_string(json_data["type"].s());
+            double price = json_data["price"].d();
+            int quantity = json_data["quantity"].i();
+            
+            // VALIDATE THE ORDER
+            std::string errorMessage;
+            if (!validateOrder(symbol, side, type, price, quantity, errorMessage)) {
+                return crow::response(400, crow::json::wvalue{{"error", errorMessage}});
+            }
+            
+            // Create order from JSON (validation passed)
             Order order = Order::from_json(json_data);
             
             // Process order through the matching engine

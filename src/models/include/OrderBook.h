@@ -28,7 +28,7 @@ private:
     std::vector<Trade> tradeLog;
     
     // Thread safety
-    mutable std::mutex bookMutex;
+    mutable std::recursive_mutex bookMutex;
     
     // Internal helper methods
     /**
@@ -100,8 +100,8 @@ public:
     OrderBook(const OrderBook&) = delete;
     OrderBook& operator=(const OrderBook&) = delete;
     
-    OrderBook(OrderBook&&) = default;
-    OrderBook& operator=(OrderBook&&) = default;
+    OrderBook(OrderBook&&) = delete;
+    OrderBook& operator=(OrderBook&&) = delete;
     
     /**
      * Adds a new order and executes matches if possible

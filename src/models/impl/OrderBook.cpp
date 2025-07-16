@@ -8,7 +8,7 @@ namespace velocore {
 OrderBook::OrderBook() : nextTradeId(1) {}
 
 std::vector<Trade> OrderBook::addOrder(Order order) {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     
     // Set order timestamp if not already set
     if (order.timestamp == std::chrono::steady_clock::time_point{}) {
@@ -175,7 +175,7 @@ bool OrderBook::pricesCross(double buyPrice, double sellPrice) const {
 }
 
 bool OrderBook::cancelOrder(uint64_t orderId) {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     
     // Search in buy book
     for (auto& [price, orders] : buyBook) {
@@ -209,17 +209,17 @@ bool OrderBook::cancelOrder(uint64_t orderId) {
 }
 
 double OrderBook::getBestBid() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     return buyBook.empty() ? 0.0 : buyBook.begin()->first;
 }
 
 double OrderBook::getBestAsk() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     return sellBook.empty() ? 0.0 : sellBook.begin()->first;
 }
 
 double OrderBook::getSpread() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     double bestBid = getBestBid();
     double bestAsk = getBestAsk();
     
@@ -231,7 +231,7 @@ double OrderBook::getSpread() const {
 }
 
 crow::json::wvalue OrderBook::getBookSnapshot(size_t levels) const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     
     crow::json::wvalue result;
     crow::json::wvalue::list bids, asks;
@@ -284,12 +284,12 @@ crow::json::wvalue OrderBook::getBookSnapshot(size_t levels) const {
 }
 
 const std::vector<Trade>& OrderBook::getTradeLog() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     return tradeLog;
 }
 
 crow::json::wvalue OrderBook::getBookStatistics() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     
     int totalBidLevels = buyBook.size();
     int totalAskLevels = sellBook.size();
@@ -315,7 +315,7 @@ crow::json::wvalue OrderBook::getBookStatistics() const {
 }
 
 void OrderBook::clear() {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     buyBook.clear();
     sellBook.clear();
     tradeLog.clear();
@@ -323,7 +323,7 @@ void OrderBook::clear() {
 }
 
 size_t OrderBook::getTotalOrders() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     
     size_t total = 0;
     for (const auto& [price, orders] : buyBook) {
@@ -337,7 +337,7 @@ size_t OrderBook::getTotalOrders() const {
 }
 
 bool OrderBook::isEmpty() const {
-    std::lock_guard<std::mutex> lock(bookMutex);
+    std::lock_guard<std::recursive_mutex> lock(bookMutex);
     return buyBook.empty() && sellBook.empty();
 }
 
