@@ -78,7 +78,7 @@ add_custom_target(run_unit_tests
 )
 
 add_custom_target(run_integration_tests
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test_rigorous_chunk1-3.sh
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test_rigorous.sh
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
