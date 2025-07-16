@@ -30,6 +30,8 @@ std::mutex ticksMutex;
 
 // Order validation function
 bool validateOrder(const std::string& symbol, Side side, OrderType type, double price, int quantity, std::string& errorMessage) {
+    (void)side;
+    
     if (quantity <= 0) {
         errorMessage = "Quantity must be greater than 0";
         return false;
@@ -230,6 +232,7 @@ int main() {
     });
     
     CROW_ROUTE(app, "/trades").methods("POST"_method)([](const crow::request& req){
+        (void)req;
         return crow::response(405, crow::json::wvalue{
             {"error", "Manual trade creation not allowed"},
             {"message", "Trades are automatically created by the matching engine when orders are matched"}

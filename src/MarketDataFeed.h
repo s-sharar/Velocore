@@ -90,7 +90,7 @@ private:
     boost::asio::io_context io_context_;
     boost::asio::ssl::context ssl_context_;
     std::unique_ptr<boost::beast::websocket::stream<
-        boost::beast::ssl_stream<boost::beast::tcp_stream>>> ws_;
+        boost::asio::ssl::stream<boost::beast::tcp_stream>>> ws_;
     boost::asio::strand<boost::asio::io_context::executor_type> strand_;
     boost::beast::flat_buffer buffer_;
     std::thread worker_thread_;

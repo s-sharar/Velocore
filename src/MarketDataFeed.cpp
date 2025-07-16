@@ -154,7 +154,7 @@ void MarketDataFeed::connectWebSocket() {
         
         // Create WebSocket stream
         ws_ = std::make_unique<boost::beast::websocket::stream<
-            boost::beast::ssl_stream<boost::beast::tcp_stream>>>(strand_, ssl_context_);
+            boost::asio::ssl::stream<boost::beast::tcp_stream>>>(strand_, ssl_context_);
         
         // Set SNI hostname
         if (!SSL_set_tlsext_host_name(ws_->next_layer().native_handle(), host.c_str())) {
