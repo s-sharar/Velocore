@@ -136,6 +136,7 @@ std::vector<std::string> MarketDataFeed::getSubscribedSymbols() const {
 }
 
 void MarketDataFeed::broadcastBookUpdate(const std::string& symbol, const MarketTick& tick) {
+    (void)symbol; // Mark as unused to suppress warning
     std::lock_guard<std::mutex> lock(callback_mutex_);
     if (tick_callback_) {
         tick_callback_(tick);
@@ -177,7 +178,8 @@ void MarketDataFeed::connectWebSocket() {
     }
 }
 
-void MarketDataFeed::onConnect(boost::beast::error_code ec) {
+void MarketDataFeed::onConnect(boost::beast::error_code ec, boost::asio::ip::tcp::endpoint endpoint) {
+    (void)endpoint; // Mark as unused to suppress warning
     if (ec) {
         reportError("Connection failed: " + ec.message());
         scheduleReconnect();
@@ -366,6 +368,7 @@ void MarketDataFeed::sendSubscriptionMessage() {
 }
 
 void MarketDataFeed::processSubscriptionAck(const nlohmann::json& message) {
+    (void)message; // Mark as unused to suppress warning
     std::lock_guard<std::mutex> lock(subscriptions_mutex_);
     
     // Add symbols to subscribed set

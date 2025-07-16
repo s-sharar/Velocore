@@ -67,7 +67,7 @@ private:
     MarketTick parseBarMessage(const nlohmann::json& bar_data);
     
     // WebSocket operations
-    void onConnect(boost::beast::error_code ec);
+    void onConnect(boost::beast::error_code ec, boost::asio::ip::tcp::endpoint endpoint);
     void onHandshake(boost::beast::error_code ec);
     void onWrite(boost::beast::error_code ec, std::size_t bytes_transferred);
     void onRead(boost::beast::error_code ec, std::size_t bytes_transferred);
