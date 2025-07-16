@@ -1,142 +1,97 @@
-# Velocore - Chunk 1: Project Setup & Architecture
+# Velocore Trading Simulator
 
-## Overview
-A high-performance trading system simulator built with C++ and the Crow web framework. Velocore establishes a solid project foundation with a basic HTTP server and outlines the modular architecture for a complete trading system.
+Welcome to Velocore! This project is a high-performance trading system simulator built from the ground up in modern C++. It's designed to be a fast, robust, and extensible foundation for simulating a real-world electronic trading environment.
 
-## Architecture
+At its core, Velocore provides a multithreaded web server that exposes a REST API for interacting with the trading system.
 
-### Separation of Concerns
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   API Layer     │    │ Business Logic  │    │   Data Layer    │
-│                 │    │                 │    │                 │
-│ • HTTP Handling │───▶│ • Matching      │───▶│ • Order Struct  │
-│ • JSON Parsing  │    │   Engine        │    │ • Trade Struct  │
-│ • Crow Routes   │    │ • Order Book    │    │ • Data Models   │
-│ • CORS/Auth     │    │ • Price-Time    │    │                 │
-│                 │    │   Priority      │    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-```
+## ✨ Features
 
-### Planned Components
+*   **RESTful API**: A clean, easy-to-use API for submitting orders, logging trades, and checking system status.
+*   **Core Data Models**: Well-defined C++ structures for `Order` and `Trade` objects, complete with business logic for tracking state and serializing to JSON.
+*   **High-Performance Foundation**: Built with modern C++ (17) and a multithreaded architecture to handle concurrent requests efficiently.
+*   **Modern Build System**: Uses CMake for easy, cross-platform configuration and building.
+*   **Clean Architecture**: A clear separation between the API layer and the underlying data models, making the system easy to extend and maintain.
 
-1. **Data Models** (Next chunks)
-   - `Order` struct: price, quantity, side, timestamp, etc.
-   - `Trade` struct: execution records
-   - Plain-old-data structures for performance
+## 🚀 Getting Started
 
-2. **Matching Engine** (Core component)
-   - In-memory order book
-   - Price-time priority matching
-   - Buy/sell order management
-   - Trade execution logic
+ Follow these steps to get the server up and running on your machine.
 
-3. **API Endpoints** (REST API)
-   - Order submission: `POST /orders`
-   - Order cancellation: `DELETE /orders/{id}`
-   - Market data: `GET /orderbook`, `GET /trades`
-   - System status: `GET /health`
+### Prerequisites
 
-4. **Concurrency & Safety**
-   - Thread-safe operations (mutex/lock-free)
-   - Concurrent client request handling
-   - Atomic operations for critical sections
+*   A C++ compiler that supports C++17 (like Clang or GCC)
+*   CMake (version 3.15 or higher)
+*   `curl` and `jq` for testing the API from the command line
 
-5. **Latency Simulation**
-   - Per-client network delay simulation
-   - Processing time hooks
-   - Realistic trading environment
+### Build Instructions
 
-## Current Implementation (Chunk 1)
+1.  **Clone the repository:**
+    ```bash
+    git clone <repo-url>
+    cd Velocore
+    ```
 
-### Basic Crow Server
-- ✅ HTTP server on port 18080
-- ✅ Multithreaded request handling
-- ✅ JSON response support
-- ✅ Test endpoints for verification
+2.  **Configure and build with CMake:**
+    ```bash
+    mkdir build
+    cd build
+    cmake ..
+    cmake --build .
+    ```
+    This will compile the project and place the executable in the `build/bin` directory. The Crow dependency is fetched automatically if not found on your system.
 
-### Available Endpoints
-- `GET /ping` - Simple connectivity test
-- `GET /health` - Server status with threading info
-- `GET /architecture` - System design overview
+3.  **Run the Server:**
+    ```bash
+    ./bin/Velocore
+    ```
+    You should see a confirmation that the server is running on `http://0.0.0.0:18080`.
 
-## Setup Instructions
+## 🧪 Using the API
 
-### 1. Dependencies (Automatic!)
-Velocore uses CMake's FetchContent to automatically download Crow from GitHub if it's not found via package manager.
+Once the server is running, open a **new terminal window** to interact with the API using `curl`.
 
-**Option A: Use package manager (faster builds):**
+### Check Server Health
+
+A simple ping to see if the server is alive.
+
 ```bash
-vcpkg install crow
-```
-
-**Option B: Automatic download (no setup required):**
-Crow will be automatically fetched during build if not found locally.
-
-### 2. Build Project
-```bash
-mkdir build
-cd build
-cmake ..
-cmake --build .
-```
-
-### 3. Run Server
-```bash
-./bin/Velocore
-```
-
-### 4. Test Endpoints
-```bash
-# Test connectivity
 curl http://localhost:18080/ping
-
-# Check server health  
-curl http://localhost:18080/health
-
-# View architecture
-curl http://localhost:18080/architecture
+# Expected Response: {"message":"pong"}
 ```
 
-## Expected Output
-Server should start with output:
-```
-=== Velocore Trading Simulator ===
-Initializing Crow web framework...
-Starting server on port 18080
-Available endpoints:
-  GET /ping        - Simple ping/pong test
-  GET /health      - Detailed health check
-  GET /architecture - System architecture overview
+### Create an Order
 
-Server running with multithreading enabled...
-Hardware concurrency: X threads
-```
+Submit a new limit order to the system.
 
-## Technology Stack
-- **Framework**: Crow (C++ HTTP framework)
-- **Standard**: C++17 (threading, modern STL)
-- **Build System**: CMake 3.15+
-- **Threading**: Multi-threaded server with thread pool
-- **JSON**: Crow's built-in JSON support
-
-## Next Steps (Upcoming Chunks)
-1. **Data Models**: Define Order/Trade structures
-2. **Matching Engine**: Implement order book logic
-3. **REST API**: Add trading endpoints
-4. **Concurrency**: Thread safety mechanisms
-5. **Performance**: Latency simulation and optimization
-
-## Project Structure
-```
-Velocore/
-├── CMakeLists.txt          # Build configuration with FetchContent
-├── README.md              # This file
-├── src/
-│   └── main.cpp           # Basic Crow server
-├── include/               # Headers (optional with FetchContent)
-└── build/                 # Build output directory
+```bash
+curl -X POST http://localhost:18080/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "SIM",
+    "side": "BUY",
+    "type": "LIMIT",
+    "price": 100.50,
+    "quantity": 100
+  }' | jq
 ```
 
----
-**Status**: ✅ Chunk 1 Complete - Basic server running with architecture foundation 
+### View All Orders
+
+Get a list of all orders currently in the system.
+
+```bash
+curl http://localhost:18080/orders | jq
+```
+
+### View System Statistics
+
+Check out real-time statistics, including total orders and trade volume.
+
+```bash
+curl http://localhost:18080/statistics | jq
+```
+
+## 🛠️ Tech Stack
+
+*   **C++17**: For modern, efficient, and robust code.
+*   **Crow (C++ Micro Web Framework)**: For the lightweight and fast REST API server.
+*   **CMake**: For cross-platform build automation.
