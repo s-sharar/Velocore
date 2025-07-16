@@ -9,11 +9,12 @@
 #include "Types.h"
 #include "Order.h"
 #include "Trade.h"
+#include "OrderBook.h"
 
 using namespace velocore;
 
-std::vector<std::unique_ptr<Order>> orders;
-std::vector<std::unique_ptr<Trade>> trades;
+// Global order book instance - the heart of the matching engine
+OrderBook orderBook;
 TradeStatistics stats;
 
 int main() {
@@ -80,10 +81,29 @@ int main() {
                 return crow::response(400, "Invalid JSON");
             }
             
-            auto order = std::make_unique<Order>(Order::from_json(json_data));
-            auto response = order->to_json();
+            // Create order from JSON
+            Order order = Order::from_json(json_data);
             
-            orders.push_back(std::move(order));
+            // Process order through the matching engine
+            std::vector<Trade> executedTrades = orderBook.addOrder(order);
+            
+            // Update statistics with any executed trades
+            for (const auto& trade : executedTrades) {
+                stats.update(trade);
+            }
+            
+            // Prepare response with order details and immediate executions
+            crow::json::wvalue response;
+            response["order"] = order.to_json();
+            response["immediate_executions"] = static_cast<int>(executedTrades.size());
+            
+            if (!executedTrades.empty()) {
+                crow::json::wvalue::list trade_list;
+                for (const auto& trade : executedTrades) {
+                    trade_list.push_back(trade.to_json());
+                }
+                response["trades"] = std::move(trade_list);
+            }
             
             return crow::response(201, response);
         } catch (const std::exception& e) {
@@ -92,62 +112,51 @@ int main() {
     });
     
     CROW_ROUTE(app, "/orders")([](){
-        crow::json::wvalue::list order_list;
-        for (const auto& order : orders) {
-            order_list.push_back(order->to_json());
-        }
-        
         return crow::json::wvalue{
-            {"orders", std::move(order_list)},
-            {"total_orders", static_cast<int>(orders.size())}
+            {"message", "Use /orderbook for current order book state"},
+            {"active_orders", static_cast<int>(orderBook.getTotalOrders())},
+            {"book_statistics", orderBook.getBookStatistics()}
         };
     });
     
-    CROW_ROUTE(app, "/orders/<int>")([]( int order_id){
-        for (const auto& order : orders) {
-            if (order->id == static_cast<uint64_t>(order_id)) {
-                return crow::response(200, order->to_json());
-            }
+    CROW_ROUTE(app, "/orderbook")([](const crow::request& req){
+        // Get number of levels to display (default: 5)
+        int levels = 5;
+        if (req.url_params.get("levels")) {
+            levels = std::stoi(req.url_params.get("levels"));
+            levels = std::max(1, std::min(levels, 20)); // Limit between 1 and 20
         }
-        return crow::response(404, crow::json::wvalue{{"error", "Order not found"}});
+        
+        return crow::json::wvalue{
+            {"orderbook", orderBook.getBookSnapshot(levels)},
+            {"statistics", orderBook.getBookStatistics()}
+        };
     });
     
     CROW_ROUTE(app, "/trades").methods("POST"_method)([](const crow::request& req){
-        try {
-            auto json_data = crow::json::load(req.body);
-            if (!json_data) {
-                return crow::response(400, "Invalid JSON");
-            }
-            
-            auto trade = std::make_unique<Trade>(Trade::from_json(json_data));
-            stats.update(*trade);
-            auto response = trade->to_json();
-            
-            trades.push_back(std::move(trade));
-            
-            return crow::response(201, response);
-        } catch (const std::exception& e) {
-            return crow::response(400, crow::json::wvalue{{"error", e.what()}});
-        }
+        return crow::response(405, crow::json::wvalue{
+            {"error", "Manual trade creation not allowed"},
+            {"message", "Trades are automatically created by the matching engine when orders are matched"}
+        });
     });
     
     CROW_ROUTE(app, "/trades")([](){
         crow::json::wvalue::list trade_list;
-        for (const auto& trade : trades) {
-            trade_list.push_back(trade->to_json());
+        for (const auto& trade : orderBook.getTradeLog()) {
+            trade_list.push_back(trade.to_json());
         }
         
         return crow::json::wvalue{
             {"trades", std::move(trade_list)},
-            {"total_trades", static_cast<int>(trades.size())},
+            {"total_trades", static_cast<int>(orderBook.getTradeLog().size())},
             {"statistics", stats.to_json()}
         };
     });
     
     CROW_ROUTE(app, "/trades/<int>")([]( int trade_id){
-        for (const auto& trade : trades) {
-            if (trade->trade_id == static_cast<uint64_t>(trade_id)) {
-                return crow::response(200, trade->to_json());
+        for (const auto& trade : orderBook.getTradeLog()) {
+            if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
+                return crow::response(200, trade.to_json());
             }
         }
         return crow::response(404, crow::json::wvalue{{"error", "Trade not found"}});
@@ -155,16 +164,41 @@ int main() {
     
     CROW_ROUTE(app, "/statistics")([](){
         return crow::json::wvalue{
-            {"orders", crow::json::wvalue{
-                {"total", static_cast<int>(orders.size())},
-                {"active", static_cast<int>(std::count_if(orders.begin(), orders.end(), 
-                    [](const auto& o) { return o->is_active(); }))},
-                {"filled", static_cast<int>(std::count_if(orders.begin(), orders.end(), 
-                    [](const auto& o) { return o->is_filled(); }))},
-                {"cancelled", static_cast<int>(std::count_if(orders.begin(), orders.end(), 
-                    [](const auto& o) { return o->is_cancelled(); }))}
+            {"orderbook", orderBook.getBookStatistics()},
+            {"market_data", crow::json::wvalue{
+                {"best_bid", orderBook.getBestBid()},
+                {"best_ask", orderBook.getBestAsk()},
+                {"spread", orderBook.getSpread()}
             }},
             {"trades", stats.to_json()}
+        };
+    });
+    
+    CROW_ROUTE(app, "/orders/<int>/cancel").methods("POST"_method)([](int order_id){
+        bool cancelled = orderBook.cancelOrder(static_cast<uint64_t>(order_id));
+        
+        if (cancelled) {
+            return crow::response(200, crow::json::wvalue{
+                {"message", "Order cancelled successfully"},
+                {"order_id", order_id}
+            });
+        } else {
+            return crow::response(404, crow::json::wvalue{
+                {"error", "Order not found or already executed"},
+                {"order_id", order_id}
+            });
+        }
+    });
+    
+    CROW_ROUTE(app, "/market")([](){
+        return crow::json::wvalue{
+            {"symbol", "SIM"},
+            {"best_bid", orderBook.getBestBid()},
+            {"best_ask", orderBook.getBestAsk()},
+            {"spread", orderBook.getSpread()},
+            {"total_active_orders", static_cast<int>(orderBook.getTotalOrders())},
+            {"total_trades", static_cast<int>(orderBook.getTradeLog().size())},
+            {"last_trade_stats", stats.to_json()}
         };
     });
     
@@ -175,13 +209,14 @@ int main() {
     std::cout << "  GET  /health             - Detailed health check" << std::endl;
     std::cout << "  GET  /architecture       - System architecture overview" << std::endl;
     std::cout << "  GET  /models/demo        - Data models demonstration" << std::endl;
-    std::cout << "  POST /orders             - Create new order" << std::endl;
-    std::cout << "  GET  /orders             - List all orders" << std::endl;
-    std::cout << "  GET  /orders/<id>        - Get specific order" << std::endl;
-    std::cout << "  POST /trades             - Create new trade" << std::endl;
-    std::cout << "  GET  /trades             - List all trades" << std::endl;
+    std::cout << "  POST /orders             - Submit new order (triggers matching engine)" << std::endl;
+    std::cout << "  GET  /orders             - Order book summary" << std::endl;
+    std::cout << "  GET  /orderbook          - Current order book snapshot (levels=N)" << std::endl;
+    std::cout << "  POST /orders/<id>/cancel - Cancel an active order" << std::endl;
+    std::cout << "  GET  /trades             - List all executed trades" << std::endl;
     std::cout << "  GET  /trades/<id>        - Get specific trade" << std::endl;
-    std::cout << "  GET  /statistics         - System statistics" << std::endl;
+    std::cout << "  GET  /market             - Current market data summary" << std::endl;
+    std::cout << "  GET  /statistics         - Market statistics and order book metrics" << std::endl;
     std::cout << std::endl;
     std::cout << "Server running with multithreading enabled..." << std::endl;
     std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << " threads" << std::endl;

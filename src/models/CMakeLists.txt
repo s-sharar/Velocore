@@ -2,12 +2,14 @@ set(MODELS_SOURCES
     impl/Types.cpp
     impl/Order.cpp
     impl/Trade.cpp
+    impl/OrderBook.cpp
 )
 
 set(MODELS_HEADERS
     include/Types.h
     include/Order.h
     include/Trade.h
+    include/OrderBook.h
 )
 
 add_library(models STATIC ${MODELS_SOURCES} ${MODELS_HEADERS})
