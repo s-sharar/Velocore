@@ -6,9 +6,9 @@
 #include <memory>
 #include <algorithm>
 
-#include "models/include/Types.h"
-#include "models/include/Order.h"
-#include "models/include/Trade.h"
+#include "Types.h"
+#include "Order.h"
+#include "Trade.h"
 
 using namespace velocore;
 
