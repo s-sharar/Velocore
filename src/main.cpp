@@ -5,6 +5,8 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 
 #include "Types.h"
 #include "Order.h"
@@ -77,8 +79,8 @@ int main() {
     });
     
     CROW_ROUTE(app, "/models/demo")([](){
-        Order sample_buy("SIM", Side::Buy, OrderType::Limit, 100.50, 100);
-        Order sample_sell("SIM", Side::Sell, OrderType::Limit, 101.00, 50);
+        Order sample_buy(1, "SIM", Side::Buy, OrderType::Limit, 100.50, 100);
+        Order sample_sell(2, "SIM", Side::Sell, OrderType::Limit, 101.00, 50);
         Trade sample_trade(sample_buy.id, sample_sell.id, "SIM", 100.75, 50);
         
         return crow::json::wvalue{
@@ -175,19 +177,21 @@ int main() {
     
     CROW_ROUTE(app, "/trades")([](){
         crow::json::wvalue::list trade_list;
-        for (const auto& trade : orderBook.getTradeLog()) {
+        auto trades = orderBook.getTradeLog();  // Returns copy for thread safety
+        for (const auto& trade : trades) {
             trade_list.push_back(trade.to_json());
         }
         
         return crow::json::wvalue{
             {"trades", std::move(trade_list)},
-            {"total_trades", static_cast<int>(orderBook.getTradeLog().size())},
+            {"total_trades", static_cast<int>(trades.size())},
             {"statistics", stats.to_json()}
         };
     });
     
     CROW_ROUTE(app, "/trades/<int>")([]( int trade_id){
-        for (const auto& trade : orderBook.getTradeLog()) {
+        auto trades = orderBook.getTradeLog();  // Returns copy for thread safety
+        for (const auto& trade : trades) {
             if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
                 return crow::response(200, trade.to_json());
             }
@@ -230,9 +234,85 @@ int main() {
             {"best_ask", orderBook.getBestAsk()},
             {"spread", orderBook.getSpread()},
             {"total_active_orders", static_cast<int>(orderBook.getTotalOrders())},
-            {"total_trades", static_cast<int>(orderBook.getTradeLog().size())},
+            {"total_trades", static_cast<int>(orderBook.getTradeCount())},
             {"last_trade_stats", stats.to_json()}
         };
+    });
+    
+    // Concurrency testing endpoint - creates multiple simultaneous orders
+    CROW_ROUTE(app, "/test/concurrency").methods("POST"_method)([](const crow::request& req){
+        try {
+            auto json_data = crow::json::load(req.body);
+            if (!json_data) {
+                return crow::response(400, "Invalid JSON");
+            }
+            
+            int num_orders = json_data["num_orders"].i();
+            int num_threads = json_data.has("num_threads") ? json_data["num_threads"].i() : 4;
+            
+            if (num_orders <= 0 || num_orders > 1000) {
+                return crow::response(400, "num_orders must be between 1 and 1000");
+            }
+            
+            std::vector<std::thread> threads;
+            std::atomic<int> completed_orders{0};
+            std::atomic<int> total_trades{0};
+            
+            auto start_time = std::chrono::high_resolution_clock::now();
+            
+            // Create worker threads
+            for (int t = 0; t < num_threads; ++t) {
+                threads.emplace_back([&, t]() {
+                    for (int i = t; i < num_orders; i += num_threads) {
+                        try {
+                            // Create alternating buy/sell orders
+                            Side side = (i % 2 == 0) ? Side::Buy : Side::Sell;
+                            double price = (side == Side::Buy) ? 99.0 + (i % 10) : 101.0 + (i % 10);
+                            int quantity = 10 + (i % 40);
+                            
+                            Order order(i + 1000, "SIM", side, OrderType::Limit, price, quantity);
+                            
+                            // Submit order to matching engine
+                            std::vector<Trade> trades = orderBook.addOrder(order);
+                            
+                            // Update counters
+                            completed_orders.fetch_add(1);
+                            total_trades.fetch_add(trades.size());
+                            
+                            // Update statistics
+                            for (const auto& trade : trades) {
+                                stats.update(trade);
+                            }
+                            
+                        } catch (const std::exception& e) {
+                            // Continue on error
+                        }
+                    }
+                });
+            }
+            
+            // Wait for all threads to complete
+            for (auto& thread : threads) {
+                thread.join();
+            }
+            
+            auto end_time = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            
+            return crow::response(200, crow::json::wvalue{
+                {"status", "completed"},
+                {"orders_submitted", completed_orders.load()},
+                {"trades_generated", total_trades.load()},
+                {"duration_ms", static_cast<int>(duration.count())},
+                {"threads_used", num_threads},
+                {"orders_per_second", completed_orders.load() * 1000.0 / duration.count()},
+                {"final_book_state", orderBook.getBookSnapshot(3)},
+                {"final_statistics", stats.to_json()}
+            });
+            
+        } catch (const std::exception& e) {
+            return crow::response(500, crow::json::wvalue{{"error", e.what()}});
+        }
     });
     
     const int port = 18080;
@@ -250,6 +330,7 @@ int main() {
     std::cout << "  GET  /trades/<id>        - Get specific trade" << std::endl;
     std::cout << "  GET  /market             - Current market data summary" << std::endl;
     std::cout << "  GET  /statistics         - Market statistics and order book metrics" << std::endl;
+    std::cout << "  POST /test/concurrency   - Test concurrent order submission (for testing thread safety)" << std::endl;
     std::cout << std::endl;
     std::cout << "Server running with multithreading enabled..." << std::endl;
     std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << " threads" << std::endl;

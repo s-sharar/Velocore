@@ -30,14 +30,14 @@ std::string to_string(OrderStatus status) {
 }
 
 Side side_from_string(const std::string& str) {
-    if (str == "BUY") return Side::Buy;
-    if (str == "SELL") return Side::Sell;
+    if (str == "BUY" || str == "buy") return Side::Buy;
+    if (str == "SELL" || str == "sell") return Side::Sell;
     throw std::invalid_argument("Invalid side: " + str);
 }
 
 OrderType order_type_from_string(const std::string& str) {
-    if (str == "LIMIT") return OrderType::Limit;
-    if (str == "MARKET") return OrderType::Market;
+    if (str == "LIMIT" || str == "limit") return OrderType::Limit;
+    if (str == "MARKET" || str == "market") return OrderType::Market;
     throw std::invalid_argument("Invalid order type: " + str);
 }
 

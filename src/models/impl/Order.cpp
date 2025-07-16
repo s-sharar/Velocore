@@ -5,8 +5,9 @@ namespace velocore {
 
 std::atomic<uint64_t> Order::id_counter{1};
 
-Order::Order(const std::string& symbol, Side side, OrderType type, double price, int quantity)
+Order::Order(uint64_t client_id, const std::string& symbol, Side side, OrderType type, double price, int quantity)
     : id(generate_id())
+    , client_id(client_id)
     , symbol(symbol)
     , side(side)
     , type(type)
@@ -46,6 +47,7 @@ crow::json::wvalue Order::to_json() const {
     
     return crow::json::wvalue{
         {"id", static_cast<int64_t>(id)},
+        {"client_id", static_cast<int64_t>(client_id)},
         {"symbol", symbol},
         {"side", to_string(side)},
         {"type", to_string(type)},
@@ -61,6 +63,7 @@ crow::json::wvalue Order::to_json() const {
 
 Order Order::from_json(const crow::json::rvalue& json) {
     Order order;
+    order.client_id = json["client_id"].u();
     order.symbol = json["symbol"].s();
     order.side = side_from_string(json["side"].s());
     order.type = order_type_from_string(json["type"].s());

@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(BUILD_TESTING "Build the tests" OFF)
+
 find_package(Threads REQUIRED)
 
 find_package(Crow CONFIG QUIET)
@@ -41,6 +43,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     models
 )
 
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(${PROJECT_NAME} PRIVATE 
         -Wall -Wextra -Wpedantic -O2
@@ -54,6 +57,11 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(${PROJECT_NAME} PRIVATE DEBUG_BUILD)
     target_compile_options(${PROJECT_NAME} PRIVATE -g -O0)
+endif()
+
+if(BUILD_TESTING)
+    enable_testing()
+    add_subdirectory(test)
 endif()
 
 message(STATUS "=== Velocore Trading Simulator Configuration ===")

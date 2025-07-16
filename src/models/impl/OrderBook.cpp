@@ -8,7 +8,8 @@ namespace velocore {
 OrderBook::OrderBook() : nextTradeId(1) {}
 
 std::vector<Trade> OrderBook::addOrder(Order order) {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Write operation - acquire exclusive lock
+    std::unique_lock<std::shared_mutex> lock(bookMutex);
     
     // Set order timestamp if not already set
     if (order.timestamp == std::chrono::steady_clock::time_point{}) {
@@ -175,7 +176,8 @@ bool OrderBook::pricesCross(double buyPrice, double sellPrice) const {
 }
 
 bool OrderBook::cancelOrder(uint64_t orderId) {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Write operation - acquire exclusive lock
+    std::unique_lock<std::shared_mutex> lock(bookMutex);
     
     // Search in buy book
     for (auto& [price, orders] : buyBook) {
@@ -209,19 +211,22 @@ bool OrderBook::cancelOrder(uint64_t orderId) {
 }
 
 double OrderBook::getBestBid() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     return buyBook.empty() ? 0.0 : buyBook.begin()->first;
 }
 
 double OrderBook::getBestAsk() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     return sellBook.empty() ? 0.0 : sellBook.begin()->first;
 }
 
 double OrderBook::getSpread() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
-    double bestBid = getBestBid();
-    double bestAsk = getBestAsk();
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
+    double bestBid = buyBook.empty() ? 0.0 : buyBook.begin()->first;
+    double bestAsk = sellBook.empty() ? 0.0 : sellBook.begin()->first;
     
     if (bestBid == 0.0 || bestAsk == 0.0) {
         return 0.0;
@@ -231,7 +236,8 @@ double OrderBook::getSpread() const {
 }
 
 crow::json::wvalue OrderBook::getBookSnapshot(size_t levels) const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     
     crow::json::wvalue result;
     crow::json::wvalue::list bids, asks;
@@ -276,20 +282,28 @@ crow::json::wvalue OrderBook::getBookSnapshot(size_t levels) const {
     
     result["bids"] = std::move(bids);
     result["asks"] = std::move(asks);
-    result["spread"] = getSpread();
-    result["best_bid"] = getBestBid();
-    result["best_ask"] = getBestAsk();
+    
+    // Calculate spread and best prices (we already have the lock)
+    double bestBid = buyBook.empty() ? 0.0 : buyBook.begin()->first;
+    double bestAsk = sellBook.empty() ? 0.0 : sellBook.begin()->first;
+    double spread = (bestBid == 0.0 || bestAsk == 0.0) ? 0.0 : bestAsk - bestBid;
+    
+    result["spread"] = spread;
+    result["best_bid"] = bestBid;
+    result["best_ask"] = bestAsk;
     
     return result;
 }
 
-const std::vector<Trade>& OrderBook::getTradeLog() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+std::vector<Trade> OrderBook::getTradeLog() const {
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     return tradeLog;
 }
 
 crow::json::wvalue OrderBook::getBookStatistics() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     
     int totalBidLevels = buyBook.size();
     int totalAskLevels = sellBook.size();
@@ -315,7 +329,8 @@ crow::json::wvalue OrderBook::getBookStatistics() const {
 }
 
 void OrderBook::clear() {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Write operation - acquire exclusive lock
+    std::unique_lock<std::shared_mutex> lock(bookMutex);
     buyBook.clear();
     sellBook.clear();
     tradeLog.clear();
@@ -323,7 +338,8 @@ void OrderBook::clear() {
 }
 
 size_t OrderBook::getTotalOrders() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     
     size_t total = 0;
     for (const auto& [price, orders] : buyBook) {
@@ -337,8 +353,15 @@ size_t OrderBook::getTotalOrders() const {
 }
 
 bool OrderBook::isEmpty() const {
-    std::lock_guard<std::recursive_mutex> lock(bookMutex);
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
     return buyBook.empty() && sellBook.empty();
+}
+
+size_t OrderBook::getTradeCount() const {
+    // Read operation - acquire shared lock
+    std::shared_lock<std::shared_mutex> lock(bookMutex);
+    return tradeLog.size();
 }
 
 } // namespace velocore

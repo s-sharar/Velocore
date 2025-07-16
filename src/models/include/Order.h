@@ -10,6 +10,7 @@ namespace velocore {
 
 struct Order {
     uint64_t id;
+    uint64_t client_id;  // Client ID for latency simulation
     std::string symbol;
     Side side;
     OrderType type;
@@ -21,7 +22,7 @@ struct Order {
     
     Order() = default;
     
-    Order(const std::string& symbol, Side side, OrderType type, double price, int quantity);
+    Order(uint64_t client_id, const std::string& symbol, Side side, OrderType type, double price, int quantity);
     
     static uint64_t generate_id();
     
