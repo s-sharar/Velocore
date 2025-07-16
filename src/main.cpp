@@ -7,17 +7,26 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <unordered_map>
+#include <mutex>
 
 #include "Types.h"
 #include "Order.h"
 #include "Trade.h"
 #include "OrderBook.h"
+#include "Config.h"
+#include "MarketDataFeed.h"
 
 using namespace velocore;
 
-// Global order book instance
+// Global instances
 OrderBook orderBook;
 TradeStatistics stats;
+std::unique_ptr<MarketDataFeed> marketDataFeed;
+
+// Market data storage
+std::unordered_map<std::string, MarketTick> latestTicks;
+std::mutex ticksMutex;
 
 // Order validation function
 bool validateOrder(const std::string& symbol, Side side, OrderType type, double price, int quantity, std::string& errorMessage) {
@@ -39,8 +48,60 @@ bool validateOrder(const std::string& symbol, Side side, OrderType type, double 
     return true;
 }
 
+// Market data callback functions
+void onMarketTick(const MarketTick& tick) {
+    std::lock_guard<std::mutex> lock(ticksMutex);
+    latestTicks[tick.symbol] = tick;
+    
+    std::cout << "Received " << to_string(tick.type) << " for " << tick.symbol;
+    if (tick.type == MarketDataType::Trade) {
+        std::cout << " - Price: $" << tick.trade_price << ", Size: " << tick.trade_size;
+    } else if (tick.type == MarketDataType::Quote) {
+        std::cout << " - Bid: $" << tick.bid_price << " x " << tick.bid_size
+                  << ", Ask: $" << tick.ask_price << " x " << tick.ask_size;
+    }
+    std::cout << std::endl;
+}
+
+void onMarketConnection(bool connected) {
+    std::cout << "Market data connection: " << (connected ? "CONNECTED" : "DISCONNECTED") << std::endl;
+}
+
+void onMarketError(const std::string& error) {
+    std::cout << "Market data error: " << error << std::endl;
+}
+
 int main() {
     std::cout << "=== Velocore Trading Simulator ===" << std::endl;
+    
+    try {
+        // Load configuration
+        std::cout << "Loading configuration..." << std::endl;
+        Configuration& config = Configuration::getInstance();
+        config.loadFromEnvironment();
+        config.validateConfiguration();
+        std::cout << "Configuration loaded successfully!" << std::endl;
+        
+        // Initialize market data feed
+        std::cout << "Initializing market data feed..." << std::endl;
+        marketDataFeed = std::make_unique<MarketDataFeed>();
+        
+        // Register callbacks
+        marketDataFeed->onTick(onMarketTick);
+        marketDataFeed->onConnection(onMarketConnection);
+        marketDataFeed->onError(onMarketError);
+        
+        // Start market data feed
+        marketDataFeed->start();
+        
+    } catch (const std::exception& e) {
+        std::cout << "Configuration error: " << e.what() << std::endl;
+        std::cout << "Please set the required environment variables:" << std::endl;
+        std::cout << "  ALPACA_API_KEY=your_api_key" << std::endl;
+        std::cout << "  ALPACA_API_SECRET=your_api_secret" << std::endl;
+        std::cout << "Continuing without market data feed..." << std::endl;
+    }
+    
     std::cout << "Initializing Crow web framework..." << std::endl;
     
     crow::SimpleApp app;
@@ -315,6 +376,77 @@ int main() {
         }
     });
     
+    // Market data endpoints
+    CROW_ROUTE(app, "/market/status")([](){
+        crow::json::wvalue response;
+        response["connected"] = marketDataFeed ? marketDataFeed->isConnected() : false;
+        response["subscribed_symbols"] = crow::json::wvalue::list();
+        
+        if (marketDataFeed) {
+            auto symbols = marketDataFeed->getSubscribedSymbols();
+            auto symbols_list = crow::json::wvalue::list();
+            for (const auto& symbol : symbols) {
+                symbols_list.push_back(symbol);
+            }
+            response["subscribed_symbols"] = std::move(symbols_list);
+        }
+        
+        return response;
+    });
+    
+    CROW_ROUTE(app, "/market/subscribe").methods("POST"_method)([](const crow::request& req){
+        if (!marketDataFeed) {
+            return crow::response{400, "Market data feed not initialized"};
+        }
+        
+        try {
+            auto json_data = crow::json::load(req.body);
+            if (!json_data) {
+                return crow::response{400, "Invalid JSON"};
+            }
+            
+            std::string symbol = json_data["symbol"].s();
+            bool trades = json_data.has("trades") ? json_data["trades"].b() : true;
+            bool quotes = json_data.has("quotes") ? json_data["quotes"].b() : true;
+            bool bars = json_data.has("bars") ? json_data["bars"].b() : false;
+            
+            marketDataFeed->subscribe(symbol, trades, quotes, bars);
+            
+            return crow::response{200, "Subscribed to " + symbol};
+            
+        } catch (const std::exception& e) {
+            return crow::response{400, "Error: " + std::string(e.what())};
+        }
+    });
+    
+    CROW_ROUTE(app, "/market/data/<string>")([]( const std::string& symbol){
+        std::lock_guard<std::mutex> lock(ticksMutex);
+        
+        auto it = latestTicks.find(symbol);
+        if (it == latestTicks.end()) {
+            return crow::response{404, "No data available for symbol: " + symbol};
+        }
+        
+        return crow::response{200, it->second.to_json().dump()};
+    });
+    
+    CROW_ROUTE(app, "/market/data")([](){
+        std::lock_guard<std::mutex> lock(ticksMutex);
+        
+        crow::json::wvalue response;
+        response["symbols"] = crow::json::wvalue::list();
+        
+        auto symbols_list = crow::json::wvalue::list();
+        for (const auto& [symbol, tick] : latestTicks) {
+            symbols_list.push_back(tick.to_json());
+        }
+        
+        response["ticks"] = std::move(symbols_list);
+        response["count"] = latestTicks.size();
+        
+        return response;
+    });
+    
     const int port = 18080;
     std::cout << "Starting server on port " << port << std::endl;
     std::cout << "Available endpoints:" << std::endl;
@@ -331,11 +463,22 @@ int main() {
     std::cout << "  GET  /market             - Current market data summary" << std::endl;
     std::cout << "  GET  /statistics         - Market statistics and order book metrics" << std::endl;
     std::cout << "  POST /test/concurrency   - Test concurrent order submission (for testing thread safety)" << std::endl;
+    std::cout << "  GET  /market/status      - Market data connection status" << std::endl;
+    std::cout << "  POST /market/subscribe   - Subscribe to market data for symbol" << std::endl;
+    std::cout << "  GET  /market/data        - Get all cached market data" << std::endl;
+    std::cout << "  GET  /market/data/<sym>  - Get latest market data for specific symbol" << std::endl;
     std::cout << std::endl;
     std::cout << "Server running with multithreading enabled..." << std::endl;
     std::cout << "Hardware concurrency: " << std::thread::hardware_concurrency() << " threads" << std::endl;
     
     app.port(port).multithreaded().run();
+    
+    // Cleanup
+    std::cout << "Shutting down..." << std::endl;
+    if (marketDataFeed) {
+        marketDataFeed->stop();
+        marketDataFeed.reset();
+    }
     
     return 0;
 } 

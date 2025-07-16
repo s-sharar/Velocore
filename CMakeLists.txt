@@ -9,6 +9,24 @@ option(BUILD_TESTING "Build the tests" OFF)
 
 find_package(Threads REQUIRED)
 
+find_package(Boost REQUIRED COMPONENTS system)
+
+find_package(OpenSSL REQUIRED)
+
+find_package(nlohmann_json QUIET)
+if(NOT nlohmann_json_FOUND)
+    message(STATUS "nlohmann_json not found, fetching from GitHub...")
+    include(FetchContent)
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG v3.11.2
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+    message(STATUS "nlohmann_json fetched successfully")
+endif()
+
 find_package(Crow CONFIG QUIET)
 
 if(NOT Crow_FOUND)
@@ -30,6 +48,7 @@ add_subdirectory(src/models)
 
 set(SOURCES
     src/main.cpp
+    src/MarketDataFeed.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -40,6 +59,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 target_link_libraries(${PROJECT_NAME} PRIVATE 
     Threads::Threads
+    Boost::system
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    nlohmann_json::nlohmann_json
     models
 )
 
