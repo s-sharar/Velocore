@@ -1,15 +1,37 @@
 cmake_minimum_required(VERSION 3.15)
+
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    message(STATUS "Using vcpkg toolchain: ${CMAKE_TOOLCHAIN_FILE}")
+endif()
+
 project(Velocore VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Windows-specific definitions
+if(WIN32)
+    add_definitions(-D_WIN32_WINNT=0x0B00)
+    add_definitions(-DWIN32_LEAN_AND_MEAN)
+    add_definitions(-DNOMINMAX)
+endif()
+
+if(MSVC)
+    add_compile_options(/bigobj)
+    add_compile_options(/permissive-)
+endif()
+
 option(BUILD_TESTING "Build the tests" OFF)
 
 find_package(Threads REQUIRED)
 
-find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED CONFIG COMPONENTS system)
 
 find_package(OpenSSL REQUIRED)
 

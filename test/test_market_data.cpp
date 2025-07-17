@@ -296,8 +296,6 @@ class MarketDataFeedTest : public MarketDataTest {
 protected:
     void SetUp() override {
         MarketDataTest::SetUp();
-        // Note: We can't easily test the full WebSocket functionality without a mock
-        // But we can test the basic interface and callback mechanisms
     }
 };
 
@@ -332,7 +330,6 @@ TEST_F(MarketDataFeedTest, MarketDataFeedCallbackRegistrationTest) {
         error_callback_called = true;
     });
     
-    // Test broadcasting (this will call the callbacks)
     MarketTick test_tick("AAPL", MarketDataType::Trade);
     feed.broadcastBookUpdate("AAPL", test_tick);
     
@@ -360,7 +357,6 @@ TEST_F(MarketDataFeedTest, MarketDataFeedSubscriptionTrackingTest) {
     MarketDataFeed feed;
     
     // Test subscription tracking (without actual WebSocket connection)
-    // This tests the internal subscription management
     feed.subscribe("AAPL", true, true, false);
     feed.subscribe("GOOGL", true, false, true);
     

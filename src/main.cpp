@@ -241,7 +241,7 @@ int main() {
     
     CROW_ROUTE(app, "/trades")([](){
         crow::json::wvalue::list trade_list;
-        auto trades = orderBook.getTradeLog();  // Returns copy for thread safety
+        auto trades = orderBook.getTradeLog();
         for (const auto& trade : trades) {
             trade_list.push_back(trade.to_json());
         }
@@ -254,7 +254,7 @@ int main() {
     });
     
     CROW_ROUTE(app, "/trades/<int>")([]( int trade_id){
-        auto trades = orderBook.getTradeLog();  // Returns copy for thread safety
+        auto trades = orderBook.getTradeLog();
         for (const auto& trade : trades) {
             if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
                 return crow::response(200, trade.to_json());
@@ -413,11 +413,27 @@ int main() {
             bool quotes = json_data.has("quotes") ? json_data["quotes"].b() : true;
             bool bars = json_data.has("bars") ? json_data["bars"].b() : false;
             
-            marketDataFeed->subscribe(symbol, trades, quotes, bars);
+            // Add debugging information
+            std::cout << "Subscription request for symbol: " << symbol << std::endl;
+            std::cout << "MarketDataFeed connected: " << (marketDataFeed->isConnected() ? "true" : "false") << std::endl;
             
-            return crow::response{200, "Subscribed to " + symbol};
+            // Check if symbol is valid
+            if (symbol.empty()) {
+                return crow::response{400, "Symbol cannot be empty"};
+            }
+            
+            // Attempt subscription
+            try {
+                marketDataFeed->subscribe(symbol, trades, quotes, bars);
+                std::cout << "Successfully queued subscription for " << symbol << std::endl;
+                return crow::response{200, "Subscribed to " + symbol};
+            } catch (const std::exception& e) {
+                std::cout << "Exception during subscription: " << e.what() << std::endl;
+                return crow::response{500, "Internal error during subscription: " + std::string(e.what())};
+            }
             
         } catch (const std::exception& e) {
+            std::cout << "Exception in subscription endpoint: " << e.what() << std::endl;
             return crow::response{400, "Error: " + std::string(e.what())};
         }
     });

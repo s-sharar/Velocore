@@ -279,11 +279,7 @@ TEST_F(MarketDataFeedMessageTest, SubscriptionManagementTest) {
 }
 
 TEST_F(MarketDataFeedMessageTest, ConnectionStatusTest) {
-    // Test initial connection status
     EXPECT_FALSE(feed->isConnected());
-    
-    // Note: Without actual WebSocket connection, 
-    // we can't test the full connection flow
 }
 
 // =====================================================

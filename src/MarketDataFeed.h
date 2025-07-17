@@ -57,10 +57,12 @@ private:
     // Authentication and subscription
     void authenticateConnection();
     void sendSubscriptionMessage();
+    void sendUnsubscriptionMessage(const std::string& symbol);
     void processSubscriptionAck(const nlohmann::json& message);
     
     // Message handling
     void handleMessage(const std::string& message);
+    void handleSingleMessage(const nlohmann::json& msg);
     void parseMarketData(const nlohmann::json& message);
     MarketTick parseTradeMessage(const nlohmann::json& trade_data);
     MarketTick parseQuoteMessage(const nlohmann::json& quote_data);
@@ -78,6 +80,10 @@ private:
     void scheduleReconnect();
     void updateConnectionStatus(bool connected);
     void reportError(const std::string& error);
+    bool parseWebSocketURL(const std::string& url, std::string& host, 
+                          std::string& port, std::string& path, bool& is_secure);
+    void startHeartbeat();
+    void handleHeartbeat();
     
     // Configuration and state
     const Configuration& config_;
@@ -85,6 +91,12 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<bool> authenticated_{false};
     std::atomic<int> reconnect_attempts_{0};
+    
+    // Connection details
+    std::string connection_host_;
+    std::string connection_port_;
+    std::string connection_path_;
+    bool connection_is_secure_{true};
     
     // WebSocket components
     boost::asio::io_context io_context_;
