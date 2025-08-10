@@ -7,7 +7,6 @@ import { motion } from "framer-motion"
 interface ChartData {
   time: string
   price: number
-  volume: number
   timestamp: number
 }
 
@@ -16,49 +15,27 @@ export function PriceChart() {
   const [currentPrice, setCurrentPrice] = useState<number>(0)
 
   useEffect(() => {
-    const generateInitialData = () => {
-      const now = Date.now()
-      const initialData: ChartData[] = []
-      let price = 150 + Math.random() * 50
-
-      for (let i = 100; i >= 0; i--) {
-        const timestamp = now - i * 30000 // 30 seconds apart
-        price += (Math.random() - 0.5) * 2
-        price = Math.max(100, Math.min(250, price))
-
-        initialData.push({
-          time: new Date(timestamp).toLocaleTimeString(),
-          price: Number(price.toFixed(2)),
-          volume: Math.floor(Math.random() * 1000) + 100,
-          timestamp,
-        })
-      }
-
-      setData(initialData)
-      setCurrentPrice(price)
-    }
-
-    generateInitialData()
-
-    const interval = setInterval(() => {
-      setData((prevData) => {
-        const newPrice = prevData[prevData.length - 1]?.price + (Math.random() - 0.5) * 3
-        const clampedPrice = Math.max(100, Math.min(250, newPrice))
-
-        const newPoint: ChartData = {
+    const fetchMidPrice = async () => {
+      try {
+        const res = await fetch("http://localhost:18080/market")
+        if (!res.ok) return
+        const m = await res.json()
+        const mid = (Number(m.best_bid || 0) + Number(m.best_ask || 0)) / 2
+        const point: ChartData = {
           time: new Date().toLocaleTimeString(),
-          price: Number(clampedPrice.toFixed(2)),
-          volume: Math.floor(Math.random() * 1000) + 100,
+          price: Number.isFinite(mid) ? Number(mid.toFixed(4)) : 0,
           timestamp: Date.now(),
         }
+        setCurrentPrice(point.price)
+        setData((prev) => [...prev.slice(-119), point])
+      } catch (_) {
+        // ignore
+      }
+    }
 
-        setCurrentPrice(clampedPrice)
-
-        const newData = [...prevData.slice(-50), newPoint]
-        return newData
-      })
-    }, 2000)
-
+    // Warm up with an immediate fetch and then poll
+    fetchMidPrice()
+    const interval = setInterval(fetchMidPrice, 2000)
     return () => clearInterval(interval)
   }, [])
 
@@ -71,8 +48,7 @@ export function PriceChart() {
           className="bg-white border border-gray-200 rounded-lg p-3 shadow-lg"
         >
           <p className="text-gray-600 text-sm">{`Time: ${label}`}</p>
-          <p className="text-blue-600 font-semibold">{`Price: $${payload[0].value.toFixed(2)}`}</p>
-          <p className="text-gray-500 text-sm">{`Volume: ${payload[0].payload.volume.toLocaleString()}`}</p>
+          <p className="text-blue-600 font-semibold">{`Mid Price: $${Number(payload[0].value).toFixed(4)}`}</p>
         </motion.div>
       )
     }

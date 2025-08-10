@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Plus, Eye } from "lucide-react"
+import { Eye } from "lucide-react"
 import { motion } from "framer-motion"
 import { PriceChart } from "@/components/price-chart"
 import { RecentTrades } from "@/components/recent-trades"
 import { CountUp } from "@/components/count-up"
-import { HotList } from "@/components/hot-list"
+import { MarketOverview } from "@/components/market-overview"
 
 interface MarketData {
   symbol: string
@@ -43,9 +43,7 @@ const itemVariants = {
     y: 0,
     opacity: 1,
     transition: {
-      type: "spring",
-      stiffness: 300,
-      damping: 24,
+      duration: 0.3,
     },
   },
 }
@@ -54,6 +52,7 @@ export default function Dashboard() {
   const [marketData, setMarketData] = useState<MarketData | null>(null)
   const [loading, setLoading] = useState(true)
   const [priceChange, setPriceChange] = useState<number>(0)
+  // Dialog state is managed inside RecentTrades for now; reserved for future wiring
 
   useEffect(() => {
     const fetchMarketData = async () => {
@@ -121,10 +120,6 @@ export default function Dashboard() {
               <Eye className="h-4 w-4 mr-2" />
               View All
             </Button>
-            <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
-              <Plus className="h-4 w-4 mr-2" />
-              New Order
-            </Button>
           </div>
         </div>
       </motion.div>
@@ -164,79 +159,33 @@ export default function Dashboard() {
             </Card>
           </motion.div>
 
-          {/* Your Wallets */}
-          <motion.div variants={itemVariants} initial="hidden" animate="visible">
-            <Card className="border-gray-200">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg font-semibold text-gray-900">Your wallets</CardTitle>
-                  <Button variant="ghost" size="sm">
-                    <Plus className="h-5 w-5 text-gray-400" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="p-4 border border-gray-200 rounded-lg text-center">
-                    <div className="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-yellow-600 font-bold text-sm">₿</span>
-                    </div>
-                    <div className="font-medium text-gray-900">Bitcoin</div>
-                    <div className="text-lg font-semibold text-gray-900 mt-1">$23,328.00</div>
-                    <div className="text-xs text-gray-500">5.34923352 BTC</div>
-                  </div>
-                  <div className="p-4 border border-gray-200 rounded-lg text-center">
-                    <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-green-600 font-bold text-sm">₮</span>
-                    </div>
-                    <div className="font-medium text-gray-900">Tether</div>
-                    <div className="text-lg font-semibold text-gray-900 mt-1">$69,897</div>
-                    <div className="text-xs text-gray-500">69,897 USDT</div>
-                  </div>
-                  <div className="p-4 border border-gray-200 rounded-lg text-center">
-                    <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-blue-600 font-bold text-sm">✕</span>
-                    </div>
-                    <div className="font-medium text-gray-900">Ripple</div>
-                    <div className="text-lg font-semibold text-gray-900 mt-1">$206.00</div>
-                    <div className="text-xs text-gray-500">0.3242422 XRP</div>
-                  </div>
-                  <div className="p-4 border border-gray-200 rounded-lg text-center">
-                    <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-purple-600 font-bold text-sm">◊</span>
-                    </div>
-                    <div className="font-medium text-gray-900">Ethereum</div>
-                    <div className="text-lg font-semibold text-gray-900 mt-1">$1,523.00</div>
-                    <div className="text-xs text-gray-500">0.0000352 ETH</div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+          {/* Removed mock wallets */}
 
           {/* Transactions */}
           <motion.div variants={itemVariants} initial="hidden" animate="visible">
-            <Card className="border-gray-200">
+          <Card className="border-gray-200">
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg font-semibold text-gray-900">Transactions</CardTitle>
+                  <CardTitle className="text-lg font-semibold text-gray-900">Recent Trades</CardTitle>
                   <Button variant="ghost" size="sm" className="text-blue-600">
                     More →
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                <RecentTrades />
+              <RecentTrades />
               </CardContent>
             </Card>
           </motion.div>
         </div>
 
-        {/* Right Sidebar - Hot List */}
+        {/* Right Sidebar - Live Market Ticks */}
         <div className="lg:col-span-1">
-          <HotList />
+          <MarketOverview />
         </div>
       </div>
+
+      {/* Trade detail dialog handled within RecentTrades */}
     </div>
   )
 }

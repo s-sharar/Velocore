@@ -114,7 +114,7 @@ export function TopHeader({ onMenuClick }: TopHeaderProps) {
                     onClick={() => {
                       setSearchQuery("")
                       setShowResults(false)
-                      // Handle symbol selection
+                      window.location.href = `/market/${encodeURIComponent(result.symbol)}`
                     }}
                   >
                     <div>
