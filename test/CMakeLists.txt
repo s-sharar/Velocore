@@ -15,23 +15,7 @@ find_package(GTest QUIET)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(OpenSSL REQUIRED)
 
-# Find nlohmann/json
-find_path(NLOHMANN_JSON_INCLUDE_DIR nlohmann/json.hpp
-    PATHS /opt/homebrew/include /usr/local/include /usr/include
-    NO_DEFAULT_PATH)
-
-if(NOT NLOHMANN_JSON_INCLUDE_DIR)
-    message(FATAL_ERROR "nlohmann/json not found. Install with: brew install nlohmann-json")
-endif()
-
-# Find Crow
-find_path(CROW_INCLUDE_DIR crow.h
-    PATHS /opt/homebrew/include /usr/local/include /usr/include
-    NO_DEFAULT_PATH)
-
-if(NOT CROW_INCLUDE_DIR)
-    message(FATAL_ERROR "Crow not found. Install with: brew install crow")
-endif()
+include(FetchContent)
 
 if(NOT GTest_FOUND AND NOT GTEST_FOUND)
     find_path(GTEST_INCLUDE_DIR gtest/gtest.h
@@ -55,8 +39,7 @@ endif()
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../src)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../src/models/include)
-include_directories(${NLOHMANN_JSON_INCLUDE_DIR})
-include_directories(${CROW_INCLUDE_DIR})
+# Crow and nlohmann_json include dirs are provided by their targets when linked
 
 if(GTEST_INCLUDE_DIR)
     include_directories(${GTEST_INCLUDE_DIR})
@@ -68,6 +51,8 @@ add_executable(test_data_structures
     ../src/models/impl/Order.cpp
     ../src/models/impl/Trade.cpp
     ../src/models/impl/OrderBook.cpp
+    ../src/models/impl/OrderBookRegistry.cpp
+    ../src/models/impl/MarketTickStore.cpp
     ../src/models/impl/Types.cpp
 )
 
@@ -91,27 +76,95 @@ add_executable(test_websocket_parsing
     ../src/MarketDataFeed.cpp
 )
 
+# Alpaca broker tests (dry-run)
+add_executable(test_alpaca_broker
+    test_alpaca_broker.cpp
+)
+
 # Link libraries for data structures test
 if(GTest_FOUND)
     target_link_libraries(test_data_structures
         GTest::gtest
         GTest::gtest_main
-        pthread
     )
 elseif(GTEST_FOUND)
     target_link_libraries(test_data_structures
         ${GTEST_LIBRARIES}
         ${GTEST_MAIN_LIBRARIES}
-        pthread
     )
 elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
     target_link_libraries(test_data_structures
         ${GTEST_LIBRARY}
         ${GTEST_MAIN_LIBRARY}
-        pthread
     )
 else()
-    message(FATAL_ERROR "GoogleTest not found. Please install it with: brew install googletest")
+    # Fetch GoogleTest if not available
+    if(NOT TARGET GTest::gtest)
+        FetchContent_Declare(
+            googletest
+            URL https://github.com/google/googletest/archive/03597a01ee50f33f9ae90c96bc99e7bf8be6caa9.zip
+        )
+        FetchContent_MakeAvailable(googletest)
+    endif()
+    target_link_libraries(test_websocket_parsing
+        GTest::gtest
+        GTest::gtest_main
+        Boost::system
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        pthread
+    )
+endif()
+
+# Link libraries for Alpaca broker test
+if(GTest_FOUND)
+    target_link_libraries(test_alpaca_broker
+        GTest::gtest
+        GTest::gtest_main
+        Boost::system
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        brokers
+    )
+elseif(GTEST_FOUND)
+    target_link_libraries(test_alpaca_broker
+        ${GTEST_LIBRARIES}
+        ${GTEST_MAIN_LIBRARIES}
+        Boost::system
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        brokers
+    )
+elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
+    target_link_libraries(test_alpaca_broker
+        ${GTEST_LIBRARY}
+        ${GTEST_MAIN_LIBRARY}
+        Boost::system
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        brokers
+    )
+else()
+    if(NOT TARGET GTest::gtest)
+        FetchContent_Declare(
+            googletest
+            URL https://github.com/google/googletest/archive/03597a01ee50f33f9ae90c96bc99e7bf8be6caa9.zip
+        )
+        FetchContent_MakeAvailable(googletest)
+    endif()
+    target_link_libraries(test_alpaca_broker
+        GTest::gtest
+        GTest::gtest_main
+        Boost::system
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        nlohmann_json::nlohmann_json
+        brokers
+        pthread
+    )
 endif()
 
 # Link libraries for market data test
@@ -122,7 +175,6 @@ if(GTest_FOUND)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 elseif(GTEST_FOUND)
     target_link_libraries(test_market_data
@@ -131,7 +183,6 @@ elseif(GTEST_FOUND)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
     target_link_libraries(test_market_data
@@ -140,7 +191,6 @@ elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 else()
     message(FATAL_ERROR "GoogleTest not found. Please install it with: brew install googletest")
@@ -154,7 +204,6 @@ if(GTest_FOUND)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 elseif(GTEST_FOUND)
     target_link_libraries(test_websocket_parsing
@@ -163,7 +212,6 @@ elseif(GTEST_FOUND)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
     target_link_libraries(test_websocket_parsing
@@ -172,7 +220,6 @@ elseif(GTEST_LIBRARY AND GTEST_MAIN_LIBRARY)
         Boost::system
         OpenSSL::SSL
         OpenSSL::Crypto
-        pthread
     )
 else()
     message(FATAL_ERROR "GoogleTest not found. Please install it with: brew install googletest")
@@ -183,13 +230,15 @@ enable_testing()
 add_test(NAME DataStructuresTest COMMAND test_data_structures)
 add_test(NAME MarketDataTest COMMAND test_market_data)
 add_test(NAME WebSocketParsingTest COMMAND test_websocket_parsing)
+add_test(NAME AlpacaBrokerTest COMMAND test_alpaca_broker)
 
 # Custom targets
 add_custom_target(run_unit_tests
-    COMMAND ./test_data_structures
-    COMMAND ./test_market_data
-    COMMAND ./test_websocket_parsing
-    DEPENDS test_data_structures test_market_data test_websocket_parsing
+    COMMAND $<TARGET_FILE:test_data_structures>
+    COMMAND $<TARGET_FILE:test_market_data>
+    COMMAND $<TARGET_FILE:test_websocket_parsing>
+    COMMAND $<TARGET_FILE:test_alpaca_broker>
+    DEPENDS test_data_structures test_market_data test_websocket_parsing test_alpaca_broker
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
@@ -234,11 +283,10 @@ add_custom_target(run_all_market_tests
 )
 
 if(NOT TARGET GTest::gtest)
-    include(FetchContent)
     FetchContent_Declare(
-        googletest
+        googletest_fallback
         URL https://github.com/google/googletest/archive/03597a01ee50f33f9ae90c96bc99e7bf8be6caa9.zip
     )
-    FetchContent_MakeAvailable(googletest)
+    FetchContent_MakeAvailable(googletest_fallback)
 endif()
  

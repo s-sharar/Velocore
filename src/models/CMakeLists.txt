@@ -3,6 +3,8 @@ set(MODELS_SOURCES
     impl/Order.cpp
     impl/Trade.cpp
     impl/OrderBook.cpp
+    impl/OrderBookRegistry.cpp
+    impl/MarketTickStore.cpp
 )
 
 set(MODELS_HEADERS
@@ -10,6 +12,8 @@ set(MODELS_HEADERS
     include/Order.h
     include/Trade.h
     include/OrderBook.h
+    include/OrderBookRegistry.h
+    include/MarketTickStore.h
 )
 
 add_library(models STATIC ${MODELS_SOURCES} ${MODELS_HEADERS})

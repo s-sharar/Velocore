@@ -1,10 +1,22 @@
 #include <gtest/gtest.h>
 #include <chrono>
 #include <thread>
+#include <string>
+
+#ifdef _WIN32
+#include <stdlib.h>
+static void unsetEnv(const char* name) { std::string nv = std::string(name) + "="; _putenv(nv.c_str()); }
+#else
+static void unsetEnv(const char* name) { unsetenv(name); }
+#endif
 #include "../src/models/include/Order.h"
 #include "../src/models/include/Trade.h"
 #include "../src/models/include/OrderBook.h"
+#include "../src/models/include/OrderBookRegistry.h"
+#include "../src/models/include/MarketTickStore.h"
 #include "../src/models/include/Types.h"
+#include <atomic>
+#include <vector>
 
 using namespace velocore;
 class DataModelsTest : public ::testing::Test {
@@ -259,6 +271,145 @@ TEST_F(MatchingEngineTest, PerformanceTest) {
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     
     EXPECT_LT(duration.count(), 100000);
+}
+
+class OrderBookRegistryTest : public ::testing::Test {
+protected:
+    Order createOrder(const std::string& symbol, Side side, OrderType type, double price, int quantity) {
+        Order order;
+        order.id = nextOrderId.fetch_add(1);
+        order.symbol = symbol;
+        order.side = side;
+        order.type = type;
+        order.price = price;
+        order.quantity = quantity;
+        order.remaining_quantity = quantity;
+        order.status = OrderStatus::Active;
+        order.timestamp = std::chrono::steady_clock::now();
+        return order;
+    }
+
+    OrderBookRegistry registry;
+    std::atomic<uint64_t> nextOrderId{1};
+};
+
+TEST_F(OrderBookRegistryTest, IsolatesSymbolsFromMatching) {
+    Order aaplBuy = createOrder("AAPL", Side::Buy, OrderType::Limit, 100.0, 50);
+    Order msftSell = createOrder("MSFT", Side::Sell, OrderType::Limit, 100.0, 50);
+
+    auto aaplTrades = registry.getOrCreate("AAPL").addOrder(aaplBuy);
+    auto msftTrades = registry.getOrCreate("MSFT").addOrder(msftSell);
+
+    EXPECT_TRUE(aaplTrades.empty());
+    EXPECT_TRUE(msftTrades.empty());
+    EXPECT_EQ(registry.tryGet("AAPL")->getTotalOrders(), 1u);
+    EXPECT_EQ(registry.tryGet("MSFT")->getTotalOrders(), 1u);
+    EXPECT_EQ(registry.totalOrders(), 2u);
+}
+
+TEST_F(OrderBookRegistryTest, ConcurrentOrdersOnDifferentSymbols) {
+    constexpr int kOrdersPerSymbol = 50;
+    std::atomic<int> errors{0};
+
+    std::thread aaplWorker([&]() {
+        try {
+            for (int i = 0; i < kOrdersPerSymbol; ++i) {
+                Order order = createOrder("AAPL", Side::Buy, OrderType::Limit, 100.0 + i, 10);
+                registry.getOrCreate("AAPL").addOrder(order);
+            }
+        } catch (...) {
+            errors.fetch_add(1);
+        }
+    });
+
+    std::thread msftWorker([&]() {
+        try {
+            for (int i = 0; i < kOrdersPerSymbol; ++i) {
+                Order order = createOrder("MSFT", Side::Sell, OrderType::Limit, 200.0 + i, 10);
+                registry.getOrCreate("MSFT").addOrder(order);
+            }
+        } catch (...) {
+            errors.fetch_add(1);
+        }
+    });
+
+    aaplWorker.join();
+    msftWorker.join();
+
+    EXPECT_EQ(errors.load(), 0);
+    ASSERT_NE(registry.tryGet("AAPL"), nullptr);
+    ASSERT_NE(registry.tryGet("MSFT"), nullptr);
+    EXPECT_EQ(registry.tryGet("AAPL")->getTotalOrders(), static_cast<size_t>(kOrdersPerSymbol));
+    EXPECT_EQ(registry.tryGet("MSFT")->getTotalOrders(), static_cast<size_t>(kOrdersPerSymbol));
+}
+
+TEST(MarketTickStoreTest, IndependentSymbolTicks) {
+    MarketTickStore store;
+
+    MarketTick aapl("AAPL", MarketDataType::Trade);
+    aapl.trade_price = 150.0;
+    aapl.trade_size = 10;
+
+    MarketTick msft("MSFT", MarketDataType::Quote);
+    msft.bid_price = 300.0;
+    msft.ask_price = 301.0;
+
+    store.upsert(aapl);
+    store.upsert(msft);
+
+    auto gotAapl = store.get("AAPL");
+    auto gotMsft = store.get("MSFT");
+    ASSERT_TRUE(gotAapl.has_value());
+    ASSERT_TRUE(gotMsft.has_value());
+    EXPECT_DOUBLE_EQ(gotAapl->trade_price, 150.0);
+    EXPECT_DOUBLE_EQ(gotMsft->bid_price, 300.0);
+    EXPECT_FALSE(store.get("GOOG").has_value());
+
+    auto all = store.snapshotAll();
+    EXPECT_EQ(all.size(), 2u);
+}
+
+TEST(MarketTickStoreTest, ConcurrentUpsertsOnDifferentSymbols) {
+    MarketTickStore store;
+    constexpr int kUpdates = 200;
+    std::atomic<int> errors{0};
+
+    std::thread t1([&]() {
+        try {
+            for (int i = 0; i < kUpdates; ++i) {
+                MarketTick tick("AAPL", MarketDataType::Trade);
+                tick.trade_price = 100.0 + i;
+                tick.trade_size = i;
+                store.upsert(tick);
+            }
+        } catch (...) {
+            errors.fetch_add(1);
+        }
+    });
+
+    std::thread t2([&]() {
+        try {
+            for (int i = 0; i < kUpdates; ++i) {
+                MarketTick tick("MSFT", MarketDataType::Trade);
+                tick.trade_price = 200.0 + i;
+                tick.trade_size = i;
+                store.upsert(tick);
+            }
+        } catch (...) {
+            errors.fetch_add(1);
+        }
+    });
+
+    t1.join();
+    t2.join();
+
+    EXPECT_EQ(errors.load(), 0);
+    auto aapl = store.get("AAPL");
+    auto msft = store.get("MSFT");
+    ASSERT_TRUE(aapl.has_value());
+    ASSERT_TRUE(msft.has_value());
+    EXPECT_DOUBLE_EQ(aapl->trade_price, 100.0 + (kUpdates - 1));
+    EXPECT_DOUBLE_EQ(msft->trade_price, 200.0 + (kUpdates - 1));
 }
 
 int main(int argc, char **argv) {

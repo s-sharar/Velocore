@@ -7,26 +7,61 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <unordered_map>
-#include <mutex>
+#include <optional>
+#include <string>
 
 #include "Types.h"
 #include "Order.h"
 #include "Trade.h"
 #include "OrderBook.h"
+#include "OrderBookRegistry.h"
+#include "MarketTickStore.h"
 #include "Config.h"
 #include "MarketDataFeed.h"
+#include <nlohmann/json.hpp>
+#include "brokers/impl/AlpacaPaperBroker.h"
 
 using namespace velocore;
 
+// CORS middleware
+struct CORSMiddleware {
+    struct context {};
+
+    void before_handle(crow::request& req, crow::response& res, context&) {
+        // Handle CORS preflight
+        if (req.method == crow::HTTPMethod::Options) {
+            res.code = 204; // No Content
+            res.add_header("Access-Control-Allow-Origin", "*");
+            res.add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+            res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            res.add_header("Access-Control-Max-Age", "86400");
+            res.end();
+        }
+    }
+
+    void after_handle(crow::request&, crow::response& res, context&) {
+        // Add CORS headers to all responses
+        res.add_header("Access-Control-Allow-Origin", "*");
+        res.add_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    }
+};
+
 // Global instances
-OrderBook orderBook;
+OrderBookRegistry orderBooks;
+MarketTickStore tickStore;
 TradeStatistics stats;
 std::unique_ptr<MarketDataFeed> marketDataFeed;
+std::unique_ptr<Broker> broker;
 
-// Market data storage
-std::unordered_map<std::string, MarketTick> latestTicks;
-std::mutex ticksMutex;
+std::optional<std::string> querySymbol(const crow::request& req) {
+    if (const char* symbol = req.url_params.get("symbol")) {
+        if (symbol[0] != '\0') {
+            return std::string(symbol);
+        }
+    }
+    return std::nullopt;
+}
 
 // Order validation function
 bool validateOrder(const std::string& symbol, Side side, OrderType type, double price, int quantity, std::string& errorMessage) {
@@ -52,9 +87,8 @@ bool validateOrder(const std::string& symbol, Side side, OrderType type, double 
 
 // Market data callback functions
 void onMarketTick(const MarketTick& tick) {
-    std::lock_guard<std::mutex> lock(ticksMutex);
-    latestTicks[tick.symbol] = tick;
-    
+    tickStore.upsert(tick);
+
     std::cout << "Received " << to_string(tick.type) << " for " << tick.symbol;
     if (tick.type == MarketDataType::Trade) {
         std::cout << " - Price: $" << tick.trade_price << ", Size: " << tick.trade_size;
@@ -87,6 +121,9 @@ int main() {
         // Initialize market data feed
         std::cout << "Initializing market data feed..." << std::endl;
         marketDataFeed = std::make_unique<MarketDataFeed>();
+        // Initialize Alpaca paper broker
+        std::cout << "Initializing Alpaca paper trading broker..." << std::endl;
+        broker = std::make_unique<AlpacaPaperBroker>();
         
         // Register callbacks
         marketDataFeed->onTick(onMarketTick);
@@ -106,7 +143,7 @@ int main() {
     
     std::cout << "Initializing Crow web framework..." << std::endl;
     
-    crow::SimpleApp app;
+    crow::App<CORSMiddleware> app;
     
     CROW_ROUTE(app, "/ping")([](){
         std::cout << "Ping endpoint accessed" << std::endl;
@@ -182,8 +219,8 @@ int main() {
             // Create order from JSON (validation passed)
             Order order = Order::from_json(json_data);
             
-            // Process order through the matching engine
-            std::vector<Trade> executedTrades = orderBook.addOrder(order);
+            // Process order through the matching engine (per-symbol book)
+            std::vector<Trade> executedTrades = orderBooks.getOrCreate(order.symbol).addOrder(order);
             
             // Update statistics with any executed trades
             for (const auto& trade : executedTrades) {
@@ -209,26 +246,51 @@ int main() {
         }
     });
     
-    CROW_ROUTE(app, "/orders")([](){
-        return crow::json::wvalue{
-            {"message", "Use /orderbook for current order book state"},
-            {"active_orders", static_cast<int>(orderBook.getTotalOrders())},
-            {"book_statistics", orderBook.getBookStatistics()}
-        };
+    CROW_ROUTE(app, "/orders")([](const crow::request& req){
+        auto symbol = querySymbol(req);
+        if (symbol) {
+            OrderBook* book = orderBooks.tryGet(*symbol);
+            if (!book) {
+                return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+            }
+            return crow::response(200, crow::json::wvalue{
+                {"symbol", *symbol},
+                {"message", "Use /orderbook?symbol= for current order book state"},
+                {"active_orders", static_cast<int>(book->getTotalOrders())},
+                {"book_statistics", book->getBookStatistics()}
+            });
+        }
+
+        return crow::response(200, crow::json::wvalue{
+            {"message", "Use /orderbook?symbol= for current order book state"},
+            {"active_orders", static_cast<int>(orderBooks.totalOrders())},
+            {"book_statistics", orderBooks.aggregateStatistics()}
+        });
     });
     
     CROW_ROUTE(app, "/orderbook")([](const crow::request& req){
+        auto symbol = querySymbol(req);
+        if (!symbol) {
+            return crow::response(400, crow::json::wvalue{{"error", "Missing required query parameter: symbol"}});
+        }
+
         // Get number of levels to display (default: 5)
         int levels = 5;
         if (req.url_params.get("levels")) {
             levels = std::stoi(req.url_params.get("levels"));
             levels = std::max(1, std::min(levels, 20)); // Limit between 1 and 20
         }
+
+        OrderBook* book = orderBooks.tryGet(*symbol);
+        if (!book) {
+            return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+        }
         
-        return crow::json::wvalue{
-            {"orderbook", orderBook.getBookSnapshot(levels)},
-            {"statistics", orderBook.getBookStatistics()}
-        };
+        return crow::response(200, crow::json::wvalue{
+            {"symbol", *symbol},
+            {"orderbook", book->getBookSnapshot(levels)},
+            {"statistics", book->getBookStatistics()}
+        });
     });
     
     CROW_ROUTE(app, "/trades").methods("POST"_method)([](const crow::request& req){
@@ -239,68 +301,168 @@ int main() {
         });
     });
     
-    CROW_ROUTE(app, "/trades")([](){
+    CROW_ROUTE(app, "/trades")([](const crow::request& req){
         crow::json::wvalue::list trade_list;
-        auto trades = orderBook.getTradeLog();
-        for (const auto& trade : trades) {
-            trade_list.push_back(trade.to_json());
+        auto symbol = querySymbol(req);
+        if (symbol) {
+            OrderBook* book = orderBooks.tryGet(*symbol);
+            if (!book) {
+                return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+            }
+            auto trades = book->getTradeLog();
+            for (const auto& trade : trades) {
+                trade_list.push_back(trade.to_json());
+            }
+            return crow::response(200, crow::json::wvalue{
+                {"symbol", *symbol},
+                {"trades", std::move(trade_list)},
+                {"total_trades", static_cast<int>(trades.size())},
+                {"statistics", stats.to_json()}
+            });
         }
-        
-        return crow::json::wvalue{
+
+        auto books = orderBooks.allBooks();
+        for (auto& [sym, book] : books) {
+            (void)sym;
+            for (const auto& trade : book->getTradeLog()) {
+                trade_list.push_back(trade.to_json());
+            }
+        }
+
+        return crow::response(200, crow::json::wvalue{
             {"trades", std::move(trade_list)},
-            {"total_trades", static_cast<int>(trades.size())},
+            {"total_trades", static_cast<int>(orderBooks.totalTrades())},
             {"statistics", stats.to_json()}
-        };
+        });
     });
     
-    CROW_ROUTE(app, "/trades/<int>")([]( int trade_id){
-        auto trades = orderBook.getTradeLog();
-        for (const auto& trade : trades) {
-            if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
-                return crow::response(200, trade.to_json());
+    CROW_ROUTE(app, "/trades/<int>")([](const crow::request& req, int trade_id){
+        auto symbol = querySymbol(req);
+        if (symbol) {
+            OrderBook* book = orderBooks.tryGet(*symbol);
+            if (!book) {
+                return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+            }
+            for (const auto& trade : book->getTradeLog()) {
+                if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
+                    return crow::response(200, trade.to_json());
+                }
+            }
+            return crow::response(404, crow::json::wvalue{{"error", "Trade not found"}});
+        }
+
+        for (auto& [sym, book] : orderBooks.allBooks()) {
+            (void)sym;
+            for (const auto& trade : book->getTradeLog()) {
+                if (trade.trade_id == static_cast<uint64_t>(trade_id)) {
+                    return crow::response(200, trade.to_json());
+                }
             }
         }
         return crow::response(404, crow::json::wvalue{{"error", "Trade not found"}});
     });
     
-    CROW_ROUTE(app, "/statistics")([](){
-        return crow::json::wvalue{
-            {"orderbook", orderBook.getBookStatistics()},
-            {"market_data", crow::json::wvalue{
-                {"best_bid", orderBook.getBestBid()},
-                {"best_ask", orderBook.getBestAsk()},
-                {"spread", orderBook.getSpread()}
-            }},
+    CROW_ROUTE(app, "/statistics")([](const crow::request& req){
+        auto symbol = querySymbol(req);
+        if (symbol) {
+            OrderBook* book = orderBooks.tryGet(*symbol);
+            if (!book) {
+                return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+            }
+            return crow::response(200, crow::json::wvalue{
+                {"symbol", *symbol},
+                {"orderbook", book->getBookStatistics()},
+                {"market_data", crow::json::wvalue{
+                    {"best_bid", book->getBestBid()},
+                    {"best_ask", book->getBestAsk()},
+                    {"spread", book->getSpread()}
+                }},
+                {"trades", stats.to_json()}
+            });
+        }
+
+        crow::json::wvalue market_data;
+        for (auto& [sym, book] : orderBooks.allBooks()) {
+            market_data[sym] = crow::json::wvalue{
+                {"best_bid", book->getBestBid()},
+                {"best_ask", book->getBestAsk()},
+                {"spread", book->getSpread()}
+            };
+        }
+
+        return crow::response(200, crow::json::wvalue{
+            {"orderbook", orderBooks.aggregateStatistics()},
+            {"market_data", std::move(market_data)},
             {"trades", stats.to_json()}
-        };
+        });
     });
     
-    CROW_ROUTE(app, "/orders/<int>/cancel").methods("POST"_method)([](int order_id){
-        bool cancelled = orderBook.cancelOrder(static_cast<uint64_t>(order_id));
+    CROW_ROUTE(app, "/orders/<int>/cancel").methods("POST"_method)([](const crow::request& req, int order_id){
+        auto symbol = querySymbol(req);
+        if (!symbol) {
+            return crow::response(400, crow::json::wvalue{{"error", "Missing required query parameter: symbol"}});
+        }
+
+        OrderBook* book = orderBooks.tryGet(*symbol);
+        if (!book) {
+            return crow::response(404, crow::json::wvalue{
+                {"error", "No order book for symbol: " + *symbol},
+                {"order_id", order_id}
+            });
+        }
+
+        bool cancelled = book->cancelOrder(static_cast<uint64_t>(order_id));
         
         if (cancelled) {
             return crow::response(200, crow::json::wvalue{
                 {"message", "Order cancelled successfully"},
-                {"order_id", order_id}
+                {"order_id", order_id},
+                {"symbol", *symbol}
             });
         } else {
             return crow::response(404, crow::json::wvalue{
                 {"error", "Order not found or already executed"},
-                {"order_id", order_id}
+                {"order_id", order_id},
+                {"symbol", *symbol}
             });
         }
     });
     
-    CROW_ROUTE(app, "/market")([](){
-        return crow::json::wvalue{
-            {"symbol", "SIM"},
-            {"best_bid", orderBook.getBestBid()},
-            {"best_ask", orderBook.getBestAsk()},
-            {"spread", orderBook.getSpread()},
-            {"total_active_orders", static_cast<int>(orderBook.getTotalOrders())},
-            {"total_trades", static_cast<int>(orderBook.getTradeCount())},
+    CROW_ROUTE(app, "/market")([](const crow::request& req){
+        auto symbol = querySymbol(req);
+        if (symbol) {
+            OrderBook* book = orderBooks.tryGet(*symbol);
+            if (!book) {
+                return crow::response(404, crow::json::wvalue{{"error", "No order book for symbol: " + *symbol}});
+            }
+            return crow::response(200, crow::json::wvalue{
+                {"symbol", *symbol},
+                {"best_bid", book->getBestBid()},
+                {"best_ask", book->getBestAsk()},
+                {"spread", book->getSpread()},
+                {"total_active_orders", static_cast<int>(book->getTotalOrders())},
+                {"total_trades", static_cast<int>(book->getTradeCount())},
+                {"last_trade_stats", stats.to_json()}
+            });
+        }
+
+        crow::json::wvalue by_symbol;
+        for (auto& [sym, book] : orderBooks.allBooks()) {
+            by_symbol[sym] = crow::json::wvalue{
+                {"best_bid", book->getBestBid()},
+                {"best_ask", book->getBestAsk()},
+                {"spread", book->getSpread()},
+                {"total_active_orders", static_cast<int>(book->getTotalOrders())},
+                {"total_trades", static_cast<int>(book->getTradeCount())}
+            };
+        }
+
+        return crow::response(200, crow::json::wvalue{
+            {"symbols", std::move(by_symbol)},
+            {"total_active_orders", static_cast<int>(orderBooks.totalOrders())},
+            {"total_trades", static_cast<int>(orderBooks.totalTrades())},
             {"last_trade_stats", stats.to_json()}
-        };
+        });
     });
     
     // Concurrency testing endpoint - creates multiple simultaneous orders
@@ -323,6 +485,7 @@ int main() {
             std::atomic<int> total_trades{0};
             
             auto start_time = std::chrono::high_resolution_clock::now();
+            OrderBook& simBook = orderBooks.getOrCreate("SIM");
             
             // Create worker threads
             for (int t = 0; t < num_threads; ++t) {
@@ -337,11 +500,11 @@ int main() {
                             Order order(i + 1000, "SIM", side, OrderType::Limit, price, quantity);
                             
                             // Submit order to matching engine
-                            std::vector<Trade> trades = orderBook.addOrder(order);
+                            std::vector<Trade> trades = simBook.addOrder(order);
                             
                             // Update counters
                             completed_orders.fetch_add(1);
-                            total_trades.fetch_add(trades.size());
+                            total_trades.fetch_add(static_cast<int>(trades.size()));
                             
                             // Update statistics
                             for (const auto& trade : trades) {
@@ -362,15 +525,20 @@ int main() {
             
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+            double duration_ms = static_cast<double>(duration.count());
+            if (duration_ms <= 0.0) {
+                duration_ms = 1.0;
+            }
             
             return crow::response(200, crow::json::wvalue{
                 {"status", "completed"},
+                {"symbol", "SIM"},
                 {"orders_submitted", completed_orders.load()},
                 {"trades_generated", total_trades.load()},
                 {"duration_ms", static_cast<int>(duration.count())},
                 {"threads_used", num_threads},
-                {"orders_per_second", completed_orders.load() * 1000.0 / duration.count()},
-                {"final_book_state", orderBook.getBookSnapshot(3)},
+                {"orders_per_second", completed_orders.load() * 1000.0 / duration_ms},
+                {"final_book_state", simBook.getBookSnapshot(3)},
                 {"final_statistics", stats.to_json()}
             });
             
@@ -438,32 +606,116 @@ int main() {
         }
     });
     
-    CROW_ROUTE(app, "/market/data/<string>")([]( const std::string& symbol){
-        std::lock_guard<std::mutex> lock(ticksMutex);
-        
-        auto it = latestTicks.find(symbol);
-        if (it == latestTicks.end()) {
+    CROW_ROUTE(app, "/market/data/<string>")([](const std::string& symbol){
+        auto tick = tickStore.get(symbol);
+        if (!tick) {
             return crow::response{404, "No data available for symbol: " + symbol};
         }
-        
-        return crow::response{200, it->second.to_json().dump()};
+        return crow::response{200, tick->to_json()};
     });
     
     CROW_ROUTE(app, "/market/data")([](){
-        std::lock_guard<std::mutex> lock(ticksMutex);
-        
-        crow::json::wvalue response;
-        response["symbols"] = crow::json::wvalue::list();
-        
-        auto symbols_list = crow::json::wvalue::list();
-        for (const auto& [symbol, tick] : latestTicks) {
+        auto ticks = tickStore.snapshotAll();
+        crow::json::wvalue::list symbols_list;
+        for (const auto& tick : ticks) {
             symbols_list.push_back(tick.to_json());
         }
-        
-        response["ticks"] = std::move(symbols_list);
-        response["count"] = latestTicks.size();
-        
-        return response;
+
+        return crow::json::wvalue{
+            {"ticks", std::move(symbols_list)},
+            {"count", static_cast<int>(ticks.size())}
+        };
+    });
+
+    // Alpaca paper trading REST endpoints
+    CROW_ROUTE(app, "/alpaca/account")([](){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        nlohmann::json res = broker->getAccount();
+        int status = res.value("_status", 200);
+        res.erase("_status");
+        return crow::response{status, res.dump()};
+    });
+
+    CROW_ROUTE(app, "/alpaca/positions")([](){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        nlohmann::json res = broker->getPositions();
+        int status = res.value("_status", 200);
+        res.erase("_status");
+        return crow::response{status, res.dump()};
+    });
+
+    CROW_ROUTE(app, "/alpaca/orders")([](const crow::request& req){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        std::string status = "open";
+        int limit = 50;
+        std::string after;
+        std::string until;
+        if (req.url_params.get("status")) status = req.url_params.get("status");
+        if (req.url_params.get("limit")) limit = std::stoi(req.url_params.get("limit"));
+        if (req.url_params.get("after")) after = req.url_params.get("after");
+        if (req.url_params.get("until")) until = req.url_params.get("until");
+        nlohmann::json res = broker->listOrders(status, limit, after, until);
+        int code = res.value("_status", 200);
+        res.erase("_status");
+        return crow::response{code, res.dump()};
+    });
+
+    CROW_ROUTE(app, "/alpaca/orders/<string>")([](const std::string& oid){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        nlohmann::json res = broker->getOrder(oid);
+        int code = res.value("_status", 200);
+        res.erase("_status");
+        return crow::response{code, res.dump()};
+    });
+
+    CROW_ROUTE(app, "/alpaca/orders").methods("POST"_method)([](const crow::request& req){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        try {
+            nlohmann::json body = nlohmann::json::parse(req.body);
+            auto toLower = [](std::string s){
+                std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                return s;
+            };
+            nlohmann::json alp;
+            bool passThrough = body.contains("symbol") && (body.contains("qty") || body.contains("notional")) && body.contains("side") && body.contains("type");
+            if (passThrough) {
+                alp = body;
+            } else {
+                alp["symbol"] = body.value("symbol", "");
+                std::string side = body.value("side", "");
+                std::string type = body.value("type", "");
+                if (side.empty() && body.contains("Side")) side = body["Side"].get<std::string>();
+                if (type.empty() && body.contains("OrderType")) type = body["OrderType"].get<std::string>();
+                alp["side"] = toLower(side);
+                alp["type"] = toLower(type);
+                if (body.contains("qty")) alp["qty"] = body["qty"]; else alp["qty"] = body.value("quantity", 0);
+                if (alp["type"] == "limit") {
+                    if (body.contains("limit_price")) alp["limit_price"] = body["limit_price"]; else alp["limit_price"] = body.value("price", 0.0);
+                }
+                alp["time_in_force"] = body.value("time_in_force", std::string("day"));
+            }
+            if (!alp.contains("time_in_force")) alp["time_in_force"] = "day";
+            nlohmann::json res = broker->placeOrder(alp);
+            int code = res.value("_status", 200);
+            res.erase("_status");
+            return crow::response{code, res.dump()};
+        } catch (const std::exception& e) {
+            return crow::response{400, std::string("Invalid JSON: ") + e.what()};
+        }
+    });
+
+    CROW_ROUTE(app, "/alpaca/orders/<string>").methods("DELETE"_method)([](const std::string& oid){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        bool ok = broker->cancelOrder(oid);
+        return ok ? crow::response{204} : crow::response{500, "Failed to cancel"};
+    });
+
+    CROW_ROUTE(app, "/alpaca/orders").methods("DELETE"_method)([](){
+        if (!broker) return crow::response{400, "Broker not initialized"};
+        nlohmann::json res = broker->cancelAllOrders();
+        int code = res.value("_status", 200);
+        res.erase("_status");
+        return crow::response{code, res.dump()};
     });
     
     const int port = 18080;
@@ -474,13 +726,13 @@ int main() {
     std::cout << "  GET  /architecture       - System architecture overview" << std::endl;
     std::cout << "  GET  /models/demo        - Data models demonstration" << std::endl;
     std::cout << "  POST /orders             - Submit new order (triggers matching engine)" << std::endl;
-    std::cout << "  GET  /orders             - Order book summary" << std::endl;
-    std::cout << "  GET  /orderbook          - Current order book snapshot (levels=N)" << std::endl;
-    std::cout << "  POST /orders/<id>/cancel - Cancel an active order" << std::endl;
-    std::cout << "  GET  /trades             - List all executed trades" << std::endl;
-    std::cout << "  GET  /trades/<id>        - Get specific trade" << std::endl;
-    std::cout << "  GET  /market             - Current market data summary" << std::endl;
-    std::cout << "  GET  /statistics         - Market statistics and order book metrics" << std::endl;
+    std::cout << "  GET  /orders             - Order book summary (?symbol= optional)" << std::endl;
+    std::cout << "  GET  /orderbook          - Order book snapshot (?symbol= required, levels=N)" << std::endl;
+    std::cout << "  POST /orders/<id>/cancel - Cancel an active order (?symbol= required)" << std::endl;
+    std::cout << "  GET  /trades             - List executed trades (?symbol= optional)" << std::endl;
+    std::cout << "  GET  /trades/<id>        - Get specific trade (?symbol= optional)" << std::endl;
+    std::cout << "  GET  /market             - Market summary (?symbol= optional)" << std::endl;
+    std::cout << "  GET  /statistics         - Stats and book metrics (?symbol= optional)" << std::endl;
     std::cout << "  POST /test/concurrency   - Test concurrent order submission (for testing thread safety)" << std::endl;
     std::cout << "  GET  /market/status      - Market data connection status" << std::endl;
     std::cout << "  POST /market/subscribe   - Subscribe to market data for symbol" << std::endl;

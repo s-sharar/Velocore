@@ -114,32 +114,30 @@ void MarketDataFeed::subscribe(const std::string& symbol, bool trades, bool quot
 
 void MarketDataFeed::unsubscribe(const std::string& symbol) {
     std::lock_guard<std::mutex> lock(subscriptions_mutex_);
-    
-    // Check if actually subscribed
-    if (subscribed_symbols_.find(symbol) == subscribed_symbols_.end()) {
-        std::cout << "Not subscribed to " << symbol << std::endl;
-        return;
+
+    // Attempt to remove from active subscriptions; track whether it was actively subscribed
+    bool was_actively_subscribed = false;
+    auto it_sub = subscribed_symbols_.find(symbol);
+    if (it_sub != subscribed_symbols_.end()) {
+        subscribed_symbols_.erase(it_sub);
+        was_actively_subscribed = true;
     }
-    
-    // Remove from subscribed symbols
-    subscribed_symbols_.erase(symbol);
-    
-    // Remove from pending subscriptions
+
+    // Always remove from pending subscriptions if present
     pending_subscriptions_.erase(
         std::remove_if(pending_subscriptions_.begin(), pending_subscriptions_.end(),
             [&symbol](const MarketSubscription& sub) { return sub.symbol == symbol; }),
         pending_subscriptions_.end()
     );
-    
-    // Send unsubscription message to Alpaca if connected and authenticated
-    if (connected_ && authenticated_) {
-        // Post the unsubscription message to the io_context thread
+
+    // Send unsubscription message only if we were actively subscribed
+    if (was_actively_subscribed && connected_ && authenticated_) {
         boost::asio::post(strand_, [this, symbol]() {
             sendUnsubscriptionMessage(symbol);
         });
     }
-    
-    std::cout << "Unsubscribed from " << symbol << std::endl;
+
+    std::cout << "Unsubscribed (or removed pending) for " << symbol << std::endl;
 }
 
 void MarketDataFeed::onTick(OnTickCallback callback) {
@@ -163,14 +161,22 @@ bool MarketDataFeed::isConnected() const {
 
 std::vector<std::string> MarketDataFeed::getSubscribedSymbols() const {
     std::lock_guard<std::mutex> lock(subscriptions_mutex_);
-    return std::vector<std::string>(subscribed_symbols_.begin(), subscribed_symbols_.end());
+    std::vector<std::string> result;
+    result.reserve(subscribed_symbols_.size() + pending_subscriptions_.size());
+    for (const auto& sym : subscribed_symbols_) result.push_back(sym);
+    for (const auto& sub : pending_subscriptions_) result.push_back(sub.symbol);
+    return result;
 }
 
 void MarketDataFeed::broadcastBookUpdate(const std::string& symbol, const MarketTick& tick) {
     (void)symbol; // Mark as unused to suppress warning
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (tick_callback_) {
-        tick_callback_(tick);
+    OnTickCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback = tick_callback_;
+    }
+    if (callback) {
+        callback(tick);
     }
 }
 
@@ -641,9 +647,13 @@ void MarketDataFeed::updateConnectionStatus(bool connected) {
     bool was_connected = connected_.exchange(connected);
     
     if (was_connected != connected) {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        if (connection_callback_) {
-            connection_callback_(connected);
+        OnConnectionCallback callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback = connection_callback_;
+        }
+        if (callback) {
+            callback(connected);
         }
     }
 }
@@ -651,9 +661,13 @@ void MarketDataFeed::updateConnectionStatus(bool connected) {
 void MarketDataFeed::reportError(const std::string& error) {
     std::cout << "MarketDataFeed Error: " << error << std::endl;
     
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (error_callback_) {
-        error_callback_(error);
+    OnErrorCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback = error_callback_;
+    }
+    if (callback) {
+        callback(error);
     }
 }
 
