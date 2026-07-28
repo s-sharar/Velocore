@@ -347,7 +347,7 @@ TEST_F(WebSocketParsingTest, MessageParsingPerformanceTest) {
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     
-    // Should be able to parse 1000 messages in less than 50ms
+    std::cout << "Parsing 1000 messages took: " << duration.count() << " microseconds" << std::endl;
     EXPECT_LT(duration.count(), 50000);
 }
 
